@@ -1,0 +1,6 @@
+Flask
+aiosqlite
+discord.py
+PyNaCl
+python-dotenv
+motor
