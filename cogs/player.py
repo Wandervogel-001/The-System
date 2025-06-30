@@ -10,9 +10,8 @@ logger = logging.getLogger(__name__)
 class IncrementButton(Button):
     def __init__(self, db, guild_id):
         super().__init__(
-            label="Increase Count",
+            label="Level Up",
             style=discord.ButtonStyle.green,
-            emoji="📈",
             custom_id="increment_button"
         )
         self.db = db
@@ -85,7 +84,7 @@ async def generate_leaderboard_embed(db, guild_id, user_id=None):
     medals = ["🥇", "🥈", "🥉"]
 
     # Header
-    lines = ["Rank | Display Name        | Count", "---------------------------------"]
+    lines = ["Rank | Display Name        | Level", "---------------------------------"]
 
     # Top 10 entries
     for i, m in enumerate(top_members):
