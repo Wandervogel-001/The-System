@@ -4,3 +4,4 @@ discord.py
 PyNaCl
 python-dotenv
 motor
+unidecode
