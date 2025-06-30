@@ -4,6 +4,7 @@ from discord.ui import View, Button
 from database import MongoDatabaseManager
 import os
 from datetime import datetime, timedelta, timezone
+from unidecode import unidecode
 import logging
 logger = logging.getLogger(__name__)
 
@@ -75,36 +76,68 @@ class IncrementButton(Button):
           )
 
 async def generate_leaderboard_embed(db, guild_id, user_id=None):
-    top_members = await db.get_top_habit_members(guild_id, limit=10)
-    all_members = await db.members.find({
-        "guild_id": guild_id,
-        "habit_count": {"$gte": 1}
-    }).sort("habit_count", -1).to_list(length=None)
+    # Fetch data
+    top = await db.get_top_habit_members(guild_id, limit=10)
+    all_members = await db.members.find(
+        {"guild_id": guild_id, "habit_count": {"$gte": 1}}
+    ).sort("habit_count", -1).to_list(length=None)
 
-    medals = ["🥇", "🥈", "🥉"]
+    # Normalize names
+    levels = [m.get("habit_count", 0) for m in top]
+    names  = [unidecode(m.get("display_name", "Unknown")) for m in top]
+    ranks  = list(range(1, len(top)+1))
 
-    # Header
-    lines = ["Rank | Display Name        | Level", "---------------------------------"]
-
-    # Top 10 entries
-    for i, m in enumerate(top_members):
-        rank = medals[i] if i < 3 else f"{i+1:>2}"
-        name = m.get("display_name", "Unknown")[:18].ljust(18)
-        count = m.get("habit_count", 0)
-        lines.append(f"{rank:>3}  | {name} | {count}")
-
-    # Check if the user is outside top 10 and add them
+    # Include user if outside top
     if user_id:
-        user_index = next((i for i, m in enumerate(all_members) if m["user_id"] == user_id), None)
-        if user_index is not None and user_index >= 10:
-            user = all_members[user_index]
-            name = user.get("display_name", "You")[:18].ljust(18)
-            count = user.get("habit_count", 0)
-            lines.append("...")
-            lines.append(f"{user_index+1:>3}  | {name} | {count}")
+        idx = next((i for i,m in enumerate(all_members) if m["user_id"]==user_id), None)
+        if idx is not None and idx>=10:
+            u = all_members[idx]
+            levels.append(u.get("habit_count", 0))
+            names.append(unidecode(u.get("display_name", "You")))
+            ranks.append(idx+1)
 
-    # Wrap in code block for alignment
-    desc = "```" + "\n".join(lines) + "```"
+    # Column headers (new order)
+    hdrs = ["Rank", "Display Name", "Level"]
+
+    # Compute widths
+    w_rank  = max(len(str(x)) for x in ranks  + [hdrs[0]]) + 2
+    w_name  = max(len(x) for x in names  + [hdrs[1]]) + 2
+    w_level = max(len(str(x)) for x in levels + [hdrs[2]]) + 2
+
+    # Box‑drawing pieces
+    TL, TM, TR = "┏", "┳", "┓"
+    ML, MM, MR = "┣", "╋", "┫"
+    BL, BM, BR = "┗", "┻", "┛"
+    V, H        = "┃", "━"
+
+    # Top border
+    top_line = TL + H*w_rank + TM + H*w_name + TM + H*w_level + TR
+
+    # Header row
+    hdr = (
+        f"{V}{hdrs[0].center(w_rank)}"
+        f"{V}{hdrs[1].center(w_name)}"
+        f"{V}{hdrs[2].center(w_level)}{V}"
+    )
+
+    # Separator
+    sep = ML + H*w_rank + MM + H*w_name + MM + H*w_level + MR
+
+    # Data rows
+    rows = []
+    for rnk, name, lvl in zip(ranks, names, levels):
+        rows.append(
+            f"{V}{str(rnk).center(w_rank)}"
+            f"{V}{name.ljust(w_name)}"
+            f"{V}{str(lvl).center(w_level)}{V}"
+        )
+
+    # Bottom border
+    bot_line = BL + H*w_rank + BM + H*w_name + BM + H*w_level + BR
+
+    # Final table
+    table = "\n".join([top_line, hdr, sep, *rows, bot_line])
+    desc  = f"```{table}```"
 
     embed = discord.Embed(
         title="🏆 Guild Ranking",
