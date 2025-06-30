@@ -45,7 +45,7 @@ intents.guilds = True  # Required for guild events
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 # Initialize Mongo database
-bot.db = MongoDatabaseManager(os.getenv("MONGO_URI"), db_name="GumBall")
+bot.db = MongoDatabaseManager(os.getenv("MONGO_URI"), db_name="TheSystem")
 
 @bot.event
 async def on_ready():
