@@ -107,7 +107,7 @@ async def generate_leaderboard_embed(db, guild_id, user_id=None):
     desc = "```" + "\n".join(lines) + "```"
 
     embed = discord.Embed(
-        title="🏆 Daily Habit Tracker Leaderboard",
+        title="🏆 Guild Ranking",
         description=desc,
         color=discord.Color.gold()
     )
