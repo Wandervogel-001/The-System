@@ -5,13 +5,13 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson.objectid import ObjectId
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from motor.motor_asyncio import AsyncIOMotorClient
 
 logger = logging.getLogger(__name__)
 
 class MongoDatabaseManager:
-    def __init__(self, uri: str, db_name: str = "TheSystem"):
+    def __init__(self, uri: str, db_name: str = "GumBall"):
         self.client = AsyncIOMotorClient(uri)
         self.db = self.client[db_name]
         self.members = self.db.members
@@ -34,7 +34,7 @@ class MongoDatabaseManager:
             "guild_id": guild_id,
             "welcome_channel_id": None,
             "welcome_role_id": None,
-            "welcome_message": "Thanks for joining {guild_name}!",
+            "welcome_message": "Welcome to {guild_name}, {user_mention}!",
             "auto_role_enabled": True,
             "welcome_enabled": True,
             "settings_json": {},
@@ -54,28 +54,31 @@ class MongoDatabaseManager:
     # ========== MEMBER DATA ==========
 
     async def add_member(self, user_id: int, guild_id: int, username: str,
-                         display_name: str, joined_at: datetime, is_bot: bool = False) -> int:
-        join_position = await self.calculate_join_position(guild_id, joined_at)
-        await self.members.update_one(
-            {"user_id": user_id, "guild_id": guild_id},
-            {"$set": {
-                "username": username,
-                "display_name": display_name,
-                "joined_at": joined_at,
-                "join_position": join_position,
-                "is_bot": is_bot,
-                "updated_at": datetime.utcnow()
-            }, "$setOnInsert": {"created_at": datetime.utcnow()}},
-            upsert=True
-        )
-        return join_position
+                     display_name: str, joined_at: datetime, is_bot: bool = False) -> int:
+      join_position = await self.calculate_join_position(guild_id, joined_at)
+      await self.members.update_one(
+          {"user_id": user_id, "guild_id": guild_id},
+          {"$set": {
+              "username": username,
+              "display_name": display_name,
+              "joined_at": joined_at,
+              "join_position": join_position,
+              "is_bot": is_bot,
+              "habit_count": 0,
+              "last_increment": None,
+              "last_active": datetime.utcnow(),
+              "updated_at": datetime.utcnow()
+          }, "$setOnInsert": {"created_at": datetime.utcnow()}},
+          upsert=True
+      )
+      return join_position
 
     async def remove_member(self, user_id: int, guild_id: int) -> bool:
         result = await self.members.delete_one({"user_id": user_id, "guild_id": guild_id})
         return result.deleted_count > 0
 
     async def update_member(self, user_id: int, guild_id: int, **kwargs):
-        allowed_fields = ["username", "display_name", "last_active"]
+        allowed_fields = ["username", "display_name", "last_active", "last_increment"]  # Added last_increment
         update_fields = {k: v for k, v in kwargs.items() if k in allowed_fields}
         if update_fields:
             update_fields["updated_at"] = datetime.utcnow()
@@ -83,6 +86,39 @@ class MongoDatabaseManager:
                 {"user_id": user_id, "guild_id": guild_id},
                 {"$set": update_fields}
             )
+
+    async def increment_habit(self, user_id: int, guild_id: int) -> str:
+      user = await self.get_member(user_id, guild_id)
+      now = datetime.now(timezone.utc)
+
+      last = user.get("last_increment")
+
+      if last:
+          # Convert to offset-aware datetime
+          if last.tzinfo is None:
+              last = last.replace(tzinfo=timezone.utc)
+
+          if last.date() == now.date():
+              return "already_incremented"  # User already pressed today
+
+      await self.members.update_one(
+          {"user_id": user_id, "guild_id": guild_id},
+          {
+              "$inc": {"habit_count": 1},
+              "$set": {
+                  "last_increment": now,
+                  "updated_at": now
+              }
+          }
+      )
+      return "incremented"
+
+    async def get_top_habit_members(self, guild_id: int, limit: int = 10):
+      cursor = self.members.find({
+          "guild_id": guild_id,
+          "habit_count": {"$gte": 1}
+      }).sort("habit_count", -1).limit(limit)
+      return await cursor.to_list(length=limit)
 
     async def get_member(self, user_id: int, guild_id: int) -> Optional[Dict[str, Any]]:
         return await self.members.find_one({"user_id": user_id, "guild_id": guild_id})
