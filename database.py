@@ -78,7 +78,7 @@ class MongoDatabaseManager:
         return result.deleted_count > 0
 
     async def update_member(self, user_id: int, guild_id: int, **kwargs):
-        allowed_fields = ["username", "display_name", "last_active", "last_increment"]  # Added last_increment
+        allowed_fields = ["username", "display_name", "last_active", "last_increment", "habit_count"]  # Added last_increment
         update_fields = {k: v for k, v in kwargs.items() if k in allowed_fields}
         if update_fields:
             update_fields["updated_at"] = datetime.utcnow()
