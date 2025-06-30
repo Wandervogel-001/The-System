@@ -1,11 +1,54 @@
 import discord
 from discord.ext import commands
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import json
+from discord.ui import View, Button, Modal, TextInput
 
 logger = logging.getLogger(__name__)
+
+class EditMemberButton(Button):
+    def __init__(self, db, member_id, guild_id):
+        super().__init__(label="🛠 Edit Info", style=discord.ButtonStyle.blurple)
+        self.db = db
+        self.member_id = member_id
+        self.guild_id = guild_id
+
+    async def callback(self, interaction: discord.Interaction):
+        # Admin-only access
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Admins only.", ephemeral=True)
+            return
+
+        modal = EditMemberModal(self.db, self.member_id, self.guild_id)
+        await interaction.response.send_modal(modal)
+
+class EditMemberModal(Modal, title="Edit Member Info"):
+    def __init__(self, db, member_id, guild_id):
+        super().__init__()
+        self.db = db
+        self.member_id = member_id
+        self.guild_id = guild_id
+
+        self.habit_input = TextInput(label="Habit Count", placeholder="Enter new habit count", required=False)
+        self.display_input = TextInput(label="Display Name", placeholder="Enter display name", required=False)
+
+        self.add_item(self.habit_input)
+        self.add_item(self.display_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        update_fields = {}
+        if self.habit_input.value.strip().isdigit():
+            update_fields["habit_count"] = int(self.habit_input.value.strip())
+        if self.display_input.value.strip():
+            update_fields["display_name"] = self.display_input.value.strip()
+
+        if update_fields:
+            await self.db.update_member(self.member_id, self.guild_id, **update_fields)
+            await interaction.response.send_message("✅ Member info updated.", ephemeral=True)
+        else:
+            await interaction.response.send_message("⚠️ No valid input given.", ephemeral=True)
 
 class DebugCog(commands.Cog):
     """Debug commands for bot maintenance and troubleshooting"""
@@ -337,10 +380,10 @@ class DebugCog(commands.Cog):
             logger.error(f"Member sync error: {e}")
             await progress_msg.edit(content=f"❌ Sync failed: {e}")
 
+
     @commands.command(name="memberinfo", aliases=["userinfo", "memberdata"], hidden=True)
-    @commands.is_owner()
+    @commands.has_permissions(administrator=True)
     async def member_details(self, ctx, member: discord.Member = None):
-        """Get detailed info about a specific member"""
         if not self.bot.db:
             await ctx.send("❌ Database not initialized")
             return
@@ -350,49 +393,49 @@ class DebugCog(commands.Cog):
             return
 
         try:
-            # Get member data from database
-            member_data = await self.bot.db.members.find_one({
-                "user_id": member.id,
-                "guild_id": ctx.guild.id
-            })
-
+            member_data = await self.bot.db.get_member(member.id, ctx.guild.id)
             if not member_data:
                 await ctx.send("❌ No data found for this member")
                 return
 
-            # Create embed with member data
             embed = discord.Embed(
                 title=f"📊 Member Details: {member.display_name}",
                 color=discord.Color.green()
             )
 
-            # Basic info
             embed.add_field(name="User ID", value=member.id, inline=True)
             embed.add_field(name="Username", value=member_data.get('username', 'N/A'), inline=True)
             embed.add_field(name="Display Name", value=member_data.get('display_name', 'N/A'), inline=True)
 
-            # Join info
             join_date = member_data.get('joined_at', 'N/A')
             if isinstance(join_date, str):
                 try:
                     join_date = datetime.fromisoformat(join_date)
                 except ValueError:
                     pass
-
             if isinstance(join_date, datetime):
                 embed.add_field(name="Joined At", value=join_date.strftime("%Y-%m-%d %H:%M:%S"), inline=True)
-                embed.add_field(name="Join Position", value=f"#{member_data.get('join_position', 'N/A')}", inline=True)
-            else:
-                embed.add_field(name="Joined At", value="N/A", inline=True)
 
-            # Activity stats
+            embed.add_field(name="Join Position", value=f"#{member_data.get('join_position', 'N/A')}", inline=True)
             embed.add_field(name="Is Bot", value="Yes" if member_data.get('is_bot') else "No", inline=True)
 
-            await ctx.send(embed=embed)
+            # Show habit data
+            embed.add_field(name="Habit Count", value=member_data.get("habit_count", 0), inline=True)
+            last = member_data.get("last_increment")
+            if last:
+                if isinstance(last, str):
+                    last = datetime.fromisoformat(last)
+                if isinstance(last, datetime):
+                    last = last.astimezone(timezone.utc)
+                    embed.add_field(name="Last Increment", value=last.strftime("%Y-%m-%d %H:%M:%S UTC"), inline=True)
+
+            view = View()
+            view.add_item(EditMemberButton(self.bot.db, member.id, ctx.guild.id))
+            await ctx.send(embed=embed, view=view)
 
         except Exception as e:
             logger.error(f"Error fetching member details: {e}")
-            await ctx.send(f"❌ Error fetching member details: {e}")
+            await ctx.send(f"❌ Error: {e}")
 
     @commands.command(name="memberlist", aliases=["members", "listmembers"], hidden=True)
     @commands.is_owner()
