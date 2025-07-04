@@ -217,10 +217,6 @@ class ShowMoreButton(Button):
         self.user = user
 
     async def callback(self, interaction: discord.Interaction):
-        if interaction.user != self.user:
-            await interaction.response.send_message("Only the original user can use this.", ephemeral=True)
-            return
-
         # Check if there are more than 10 members total
         total_members = await self.db.members.count_documents(
             {"guild_id": self.guild_id, "habit_count": {"$gte": 1}}
