@@ -45,18 +45,26 @@ class IncrementButton(Button):
                   last_increment = last_increment.replace(tzinfo=timezone.utc)
 
               if (now - last_increment) < timedelta(days=1):
-                  reset_time = last_increment + timedelta(days=1)
-                  await interaction.response.send_message(
-                      f"⚠️ You can only increment once per day!\nNext available: <t:{int(reset_time.timestamp())}:R>",
-                      ephemeral=True
-                  )
-                  return
+                reset_time = last_increment + timedelta(days=1)
+                await interaction.response.send_message(
+                    f"⚠️ You can only increment once per day! Next available: <t:{int(reset_time.timestamp())}:R>",
+                    ephemeral=True
+                )
+                return
 
           # Increment in DB
           await self.db.increment_habit(user_id, self.guild_id)
-
-          # Update member info
           await self.db.update_member(
+              user_id,
+              self.guild_id,
+              last_increment=now,
+              username=user.name,
+              display_name=user.display_name
+          )
+
+          # Refresh leaderboard
+          embed = await generate_leaderboard_embed(self.db, self.guild_id, user_id)
+          await interaction.response.edit_message(embed=embed)(
               user_id,
               self.guild_id,
               last_increment=now,
@@ -160,30 +168,7 @@ class Players(commands.Cog):
         self.load_existing_leaderboards.start()
 
     def cog_unload(self):
-        self.load_existing_leaderboards.cancel()
-        self.update_leaderboard.cancel()
-
-    @tasks.loop(minutes=1)
-    async def update_leaderboard(self):
-        to_remove = []
-
-        for guild_id, data in self.leaderboard_data.items():
-            try:
-                channel = self.bot.get_channel(data["channel_id"])
-                message = await channel.fetch_message(data["message_id"])
-                embed = await generate_leaderboard_embed(self.db, guild_id)
-                await message.edit(embed=embed)
-            except discord.NotFound:
-                to_remove.append(guild_id)
-            except Exception as e:
-                logger.error(f"Error updating leaderboard for guild {guild_id}: {e}")
-
-        for guild_id in to_remove:
-            self.leaderboard_data.pop(guild_id, None)
-            await self.db.update_server_setting(guild_id, "leaderboard_message_id", None)
-
-
-    @tasks.loop(count=1)
+        self.load_existing_leaderboards.cancel()@tasks.loop(count=1)
     async def load_existing_leaderboards(self):
         """Load existing leaderboard on startup (runs once)"""
         await self.bot.wait_until_ready()
@@ -211,12 +196,7 @@ class Players(commands.Cog):
               logger.error(f"Failed to load leaderboard for guild {settings['guild_id']}: {e}")
               # Only clear if it's a real error like a 404
               if isinstance(e, discord.NotFound):
-                  await self.db.update_server_setting(settings["guild_id"], "leaderboard_message_id", None)
-
-
-        self.update_leaderboard.start()
-
-    @commands.command(name="leaderboard")
+                  await self.db.update_server_setting(settings["guild_id"], "leaderboard_message_id", None)@commands.command(name="leaderboard")
     @commands.has_permissions(manage_messages=True)
     async def leaderboard(self, ctx):
         settings = await self.db.get_server_settings(ctx.guild.id)
