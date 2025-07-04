@@ -93,12 +93,12 @@ class DebugCog(commands.Cog):
     @commands.command(name="fix_member_data", hidden=True)
     @commands.is_owner()
     async def fix_member_data(self, ctx):
-        """Fix corrupted member data by rebuilding from Discord"""
+        """Fix corrupted member data by rebuilding from Discord while preserving habit data"""
         if not self.bot.db:
             await ctx.send("❌ Database not initialized")
             return
 
-        confirmation = await ctx.send("⚠️ This will DELETE all member data and rebuild from Discord. React with ✅ to confirm.")
+        confirmation = await ctx.send("⚠️ This will rebuild member data from Discord while preserving habit counts. React with ✅ to confirm.")
         await confirmation.add_reaction("✅")
         await confirmation.add_reaction("❌")
 
@@ -118,7 +118,19 @@ class DebugCog(commands.Cog):
 
         try:
             guild = ctx.guild
-            progress_msg = await ctx.send("🔄 Rebuilding member database...")
+            progress_msg = await ctx.send("🔄 Rebuilding member database while preserving habit data...")
+
+            # First, get existing habit data to preserve
+            existing_habit_data = {}
+            existing_members = await self.bot.db.members.find({"guild_id": guild.id}).to_list(length=None)
+
+            for member in existing_members:
+                user_id = member.get("user_id")
+                if user_id:
+                    existing_habit_data[user_id] = {
+                        "habit_count": member.get("habit_count", 0),
+                        "last_increment": member.get("last_increment")
+                    }
 
             # Clear existing data for this guild
             await self.bot.db.members.delete_many({"guild_id": guild.id})
@@ -135,9 +147,12 @@ class DebugCog(commands.Cog):
 
             all_members = humans + bots
 
-            # Insert members with correct data
+            # Insert members with correct data, preserving habit information
             for position, member in enumerate(all_members, 1):
-                await self.bot.db.members.insert_one({
+                # Get preserved habit data for this user
+                preserved_data = existing_habit_data.get(member.id, {})
+
+                member_doc = {
                     "user_id": member.id,
                     "guild_id": guild.id,
                     "username": str(member),
@@ -145,11 +160,15 @@ class DebugCog(commands.Cog):
                     "joined_at": member.joined_at or datetime.utcnow(),
                     "join_position": position,
                     "is_bot": member.bot,
+                    "habit_count": preserved_data.get("habit_count", 0),  # Preserve habit count
+                    "last_increment": preserved_data.get("last_increment"),  # Preserve last increment
                     "created_at": datetime.utcnow(),
                     "updated_at": datetime.utcnow()
-                })
+                }
 
-            await progress_msg.edit(content=f"✅ Rebuilt database with {len(all_members)} members")
+                await self.bot.db.members.insert_one(member_doc)
+
+            await progress_msg.edit(content=f"✅ Rebuilt database with {len(all_members)} members (habit data preserved)")
 
             # Verify the fix
             await ctx.invoke(self.bot.get_command('analyze_members'))
