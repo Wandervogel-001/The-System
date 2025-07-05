@@ -16,39 +16,112 @@ class EditMemberButton(Button):
         self.guild_id = guild_id
 
     async def callback(self, interaction: discord.Interaction):
-        # Admin-only access
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Admins only.", ephemeral=True)
             return
 
-        modal = EditMemberModal(self.db, self.member_id, self.guild_id)
+        # Fetch current member data to pre-fill the modal
+        member_data = await self.db.get_member(self.member_id, self.guild_id)
+        modal = EditMemberModal(self.db, self.member_id, self.guild_id, member_data)
         await interaction.response.send_modal(modal)
 
 class EditMemberModal(Modal, title="Edit Member Info"):
-    def __init__(self, db, member_id, guild_id):
+    def __init__(self, db, member_id, guild_id, member_data=None):
         super().__init__()
         self.db = db
         self.member_id = member_id
         self.guild_id = guild_id
 
-        self.habit_input = TextInput(label="Habit Count", placeholder="Enter new habit count", required=False)
-        self.display_input = TextInput(label="Display Name", placeholder="Enter display name", required=False)
+        # Create input fields for all editable properties
+        self.habit_count = TextInput(
+            label="Habit Count",
+            placeholder="Enter number",
+            default=str(member_data.get("habit_count", "")) if member_data else None,
+            required=False
+        )
 
-        self.add_item(self.habit_input)
-        self.add_item(self.display_input)
+        self.display_name = TextInput(
+            label="Display Name",
+            placeholder="Leave empty to keep current",
+            default=member_data.get("display_name", "") if member_data else None,
+            required=False
+        )
+
+        self.username = TextInput(
+            label="Username",
+            placeholder="Leave empty to keep current",
+            default=member_data.get("username", "") if member_data else None,
+            required=False
+        )
+
+        self.join_position = TextInput(
+            label="Join Position",
+            placeholder="Enter number",
+            default=str(member_data.get("join_position", "")) if member_data else None,
+            required=False
+        )
+
+        self.joined_at = TextInput(
+            label="Joined At (YYYY-MM-DD HH:MM:SS)",
+            placeholder="Leave empty to keep current",
+            default=member_data.get("joined_at", "").strftime("%Y-%m-%d %H:%M:%S")
+                   if member_data and member_data.get("joined_at") else None,
+            required=False
+        )
+
+        # Add all fields to the modal
+        self.add_item(self.habit_count)
+        self.add_item(self.display_name)
+        self.add_item(self.username)
+        self.add_item(self.join_position)
+        self.add_item(self.joined_at)
 
     async def on_submit(self, interaction: discord.Interaction):
         update_fields = {}
-        if self.habit_input.value.strip().isdigit():
-            update_fields["habit_count"] = int(self.habit_input.value.strip())
-        if self.display_input.value.strip():
-            update_fields["display_name"] = self.display_input.value.strip()
+
+        # Process each field
+        if self.habit_count.value.strip():
+            try:
+                update_fields["habit_count"] = int(self.habit_count.value.strip())
+            except ValueError:
+                await interaction.response.send_message("⚠️ Habit count must be a number", ephemeral=True)
+                return
+
+        if self.display_name.value.strip():
+            update_fields["display_name"] = self.display_name.value.strip()
+
+        if self.username.value.strip():
+            update_fields["username"] = self.username.value.strip()
+
+        if self.join_position.value.strip():
+            try:
+                update_fields["join_position"] = int(self.join_position.value.strip())
+            except ValueError:
+                await interaction.response.send_message("⚠️ Join position must be a number", ephemeral=True)
+                return
+
+        if self.joined_at.value.strip():
+            try:
+                update_fields["joined_at"] = datetime.strptime(
+                    self.joined_at.value.strip(),
+                    "%Y-%m-%d %H:%M:%S"
+                ).replace(tzinfo=timezone.utc)
+            except ValueError:
+                await interaction.response.send_message(
+                    "⚠️ Invalid date format. Use YYYY-MM-DD HH:MM:SS",
+                    ephemeral=True
+                )
+                return
 
         if update_fields:
-            await self.db.update_member(self.member_id, self.guild_id, **update_fields)
-            await interaction.response.send_message("✅ Member info updated.", ephemeral=True)
+            await self.db.update_member(
+                self.member_id,
+                self.guild_id,
+                **update_fields
+            )
+            await interaction.response.send_message("✅ Member info updated successfully!", ephemeral=True)
         else:
-            await interaction.response.send_message("⚠️ No valid input given.", ephemeral=True)
+            await interaction.response.send_message("⚠️ No changes were made.", ephemeral=True)
 
 class DebugCog(commands.Cog):
     """Debug commands for bot maintenance and troubleshooting"""
@@ -576,6 +649,84 @@ class DebugCog(commands.Cog):
         except Exception as e:
             await ctx.send(f"❌ An error occurred: {str(e)}")
             logger.error(f"Error in member_dashboard: {e}")
+
+    @commands.command(name="editinfo")
+    @commands.has_permissions(administrator=True)
+    async def edit_member_info(self, ctx, member: discord.Member, field: str, *, value: str):
+        """Edit any member information field directly.
+
+        Example:
+        !editinfo @Harish N Logan last_increment 2025-07-03T12:30:30.251+00:00
+        """
+        if not self.bot.db:
+            return await ctx.send("❌ Database not initialized")
+
+        valid_fields = {
+            "username": str,
+            "display_name": str,
+            "joined_at": "datetime",
+            "join_position": int,
+            "is_bot": bool,
+            "habit_count": int,
+            "last_increment": "datetime"
+        }
+
+        # Normalize field name (accept both with underscore and space)
+        field = field.lower().replace(" ", "_")
+
+        if field not in valid_fields:
+            valid_fields_list = "\n".join(f"- `{f}`" for f in valid_fields.keys())
+            return await ctx.send(
+                f"❌ Invalid field. Available fields:\n{valid_fields_list}\n"
+                f"Example: `!editinfo @User habit_count 5`"
+            )
+
+        try:
+            # Process value based on field type
+            processed_value = None
+            field_type = valid_fields[field]
+
+            if field_type == str:
+                processed_value = value.strip()
+            elif field_type == int:
+                processed_value = int(value)
+            elif field_type == bool:
+                processed_value = value.lower() in ("true", "yes", "1", "y")
+            elif field_type == "datetime":
+                try:
+                    # Try ISO format first
+                    processed_value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                except ValueError:
+                    try:
+                        # Try alternate format if ISO fails
+                        processed_value = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+                    except ValueError:
+                        raise ValueError(
+                            "Invalid date format. Use ISO (2025-07-03T12:30:30.251+00:00) "
+                            "or YYYY-MM-DD HH:MM:SS"
+                        )
+                processed_value = processed_value.replace(tzinfo=timezone.utc)
+
+            # Update the database
+            update_result = await self.bot.db.update_member(
+                user_id=member.id,
+                guild_id=ctx.guild.id,
+                **{field: processed_value}
+            )
+
+            if update_result is None:
+                await ctx.send("⚠️ No valid fields were provided for update")
+            elif update_result.modified_count > 0:
+                await ctx.send(f"✅ Updated {member.display_name}'s `{field}` to `{value}`")
+            else:
+                await ctx.send(f"⚠️ No changes made to {member.display_name}'s record (field may have same value)")
+
+        except ValueError as e:
+            await ctx.send(f"❌ Error processing value: {e}\n"
+                          f"Expected type: {valid_fields[field]}")
+        except Exception as e:
+            logger.error(f"Error in editinfo command: {e}")
+            await ctx.send(f"❌ An error occurred: {e}")
 
 async def setup(bot):
     await bot.add_cog(DebugCog(bot))
