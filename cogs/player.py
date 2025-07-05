@@ -70,6 +70,7 @@ class IncrementButton(Button):
 
             # Get the current view to preserve other buttons
             view = generate_leaderboard_view(self.db, self.guild_id)
+            view.add_item(ShowMoreButton(self.db, self.guild_id, interaction.user))
 
             await interaction.response.edit_message(embed=embed, view=view)
 
