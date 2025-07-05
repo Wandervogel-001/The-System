@@ -11,7 +11,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 logger = logging.getLogger(__name__)
 
 class MongoDatabaseManager:
-    def __init__(self, uri: str, db_name: str = "TheSystem"):
+    def __init__(self, uri: str, db_name: str = "GumBall"):
         self.client = AsyncIOMotorClient(uri)
         self.db = self.client[db_name]
         self.members = self.db.members
@@ -78,14 +78,20 @@ class MongoDatabaseManager:
         return result.deleted_count > 0
 
     async def update_member(self, user_id: int, guild_id: int, **kwargs):
-        allowed_fields = ["username", "display_name", "last_active", "last_increment", "habit_count"]  # Added last_increment
-        update_fields = {k: v for k, v in kwargs.items() if k in allowed_fields}
-        if update_fields:
-            update_fields["updated_at"] = datetime.utcnow()
-            await self.members.update_one(
-                {"user_id": user_id, "guild_id": guild_id},
-                {"$set": update_fields}
-            )
+      allowed_fields = [
+          "username", "display_name", "last_active",
+          "last_increment", "habit_count", "joined_at",
+          "join_position", "is_bot"
+      ]
+      update_fields = {k: v for k, v in kwargs.items() if k in allowed_fields}
+      if update_fields:
+          update_fields["updated_at"] = datetime.utcnow()
+          result = await self.members.update_one(
+              {"user_id": user_id, "guild_id": guild_id},
+              {"$set": update_fields}
+          )
+          return result
+      return None
 
     async def increment_habit(self, user_id: int, guild_id: int) -> str:
       user = await self.get_member(user_id, guild_id)
