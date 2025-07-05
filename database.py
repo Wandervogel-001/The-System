@@ -11,7 +11,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 logger = logging.getLogger(__name__)
 
 class MongoDatabaseManager:
-    def __init__(self, uri: str, db_name: str = "GumBall"):
+    def __init__(self, uri: str, db_name: str = "TheSystem"):
         self.client = AsyncIOMotorClient(uri)
         self.db = self.client[db_name]
         self.members = self.db.members
